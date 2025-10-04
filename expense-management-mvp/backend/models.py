@@ -70,6 +70,9 @@ class Expense(db.Model):
     currency = db.Column(db.String(3), nullable=False)  # Currency of the expense
     category = db.Column(db.String(50))  # e.g., 'Travel', 'Meals', 'Office Supplies'
     
+    # --- FIX: Added the missing date column, which frontend requires ---
+    date = db.Column(db.Date, default=datetime.utcnow().date)
+    
     status = db.Column(db.String(20), default='Pending')  # 'Pending', 'Approved', 'Rejected'
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
     
@@ -86,6 +89,9 @@ class Expense(db.Model):
             'amount': self.amount,
             'currency': self.currency,
             'category': self.category,
+            # --- FIX: Included date in the JSON response ---
+            'date': self.date.isoformat() if self.date else None,
+            
             'status': self.status,
             'submitted_at': self.submitted_at.isoformat()
         }
