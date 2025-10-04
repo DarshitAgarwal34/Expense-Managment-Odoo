@@ -48,17 +48,29 @@ def seed_demo_data():
     db.session.add(admin)
     db.session.flush()
     
-    # Create Manager (Sequence 1 Approver)
-    manager = User(
+    # Create Manager 1 (The direct manager for employee 1)
+    manager1 = User(
         email='manager@company.com',
         password='manager123',      # <-- Unique Password
-        name='Darshit Manager',
+        name='Darshit Manager 1',
         role='Manager',
         company_id=company.id,
-        manager_id=admin.id          # Reports to Admin for potential Seq 2
+        manager_id=admin.id          # Reports to Admin
     )
-    db.session.add(manager)
+    db.session.add(manager1)
     db.session.flush()  # Get manager.id
+    
+    # Create Manager 2 (A parallel approver)
+    manager2 = User(
+        email='manager2@company.com',
+        password='manager234',
+        name='Aisha Manager 2',
+        role='Manager',
+        company_id=company.id,
+        manager_id=admin.id
+    )
+    db.session.add(manager2)
+    db.session.flush()
     
     # Create Employees
     employee1 = User(
@@ -67,7 +79,7 @@ def seed_demo_data():
         name='Rahul Employee',
         role='Employee',
         company_id=company.id,
-        manager_id=manager.id
+        manager_id=manager1.id # Reports to Manager 1
     )
     
     employee2 = User(
@@ -76,7 +88,7 @@ def seed_demo_data():
         name='Anubhav employee',
         role='Employee',
         company_id=company.id,
-        manager_id=manager.id
+        manager_id=manager1.id # Reports to Manager 1
     )
     
     db.session.add_all([employee1, employee2])
@@ -84,7 +96,7 @@ def seed_demo_data():
     
     # --- Create Sample Expenses ---
     
-    # Expense 1: Pending (waiting for manager approval)
+    # Expense 1: Pending (waiting for parallel approval)
     expense1 = Expense(
         user_id=employee1.id,
         company_id=company.id,
@@ -93,22 +105,24 @@ def seed_demo_data():
         amount=85.50,
         currency='USD',
         category='Meals',
-        date=today, # <-- FIX: Added date for new model schema
+        date=today,
         status='Pending'
     )
     db.session.add(expense1)
     db.session.flush()
     
-    # Create first approval step for expense1
-    step1 = ApprovalStep(
-        expense_id=expense1.id,
-        approver_id=manager.id,
-        sequence=1,
-        status='Waiting'
-    )
-    db.session.add(step1)
+    # Create approval steps for all approvers (Admin, Manager 1, Manager 2)
+    approver_ids_1 = [admin.id, manager1.id, manager2.id]
+    for approver_id in approver_ids_1:
+        step = ApprovalStep(
+            expense_id=expense1.id,
+            approver_id=approver_id,
+            sequence=1,
+            status='Waiting'
+        )
+        db.session.add(step)
     
-    # Expense 2: Pending (in EUR, waiting for manager) - Used to test currency conversion
+    # Expense 2: Pending (in EUR, waiting for parallel approval)
     expense2 = Expense(
         user_id=employee2.id,
         company_id=company.id,
@@ -117,19 +131,21 @@ def seed_demo_data():
         amount=450.00,
         currency='EUR',
         category='Travel',
-        date=today, # <-- FIX: Added date for new model schema
+        date=today,
         status='Pending'
     )
     db.session.add(expense2)
     db.session.flush()
     
-    step2 = ApprovalStep(
-        expense_id=expense2.id,
-        approver_id=manager.id,
-        sequence=1,
-        status='Waiting'
-    )
-    db.session.add(step2)
+    approver_ids_2 = [admin.id, manager1.id, manager2.id]
+    for approver_id in approver_ids_2:
+        step = ApprovalStep(
+            expense_id=expense2.id,
+            approver_id=approver_id,
+            sequence=1,
+            status='Waiting'
+        )
+        db.session.add(step)
     
     # Expense 3: Already approved (for demo history)
     expense3 = Expense(
@@ -140,15 +156,16 @@ def seed_demo_data():
         amount=120.00,
         currency='USD',
         category='Office Supplies',
-        date=today, # <-- FIX: Added date for new model schema
+        date=today,
         status='Approved'
     )
     db.session.add(expense3)
     db.session.flush()
     
+    # Only need to mark ONE step as approved if this was approved by one person
     step3 = ApprovalStep(
         expense_id=expense3.id,
-        approver_id=manager.id,
+        approver_id=manager1.id,
         sequence=1,
         status='Approved',
         comments='Approved - standard supplies',
@@ -277,29 +294,37 @@ def create_user_by_admin():
     data = request.json
     
     required_fields = ['name', 'email', 'password', 'role', 'company_id']
-    for field in required_fields:
-        if field not in data:
-            return jsonify({'error': f'Missing required field: {field}'}), 400
     
-    if data['role'] not in ['Employee', 'Manager', 'Admin']:
+    # FIX: Explicitly read inputs as strings for robustness
+    name = data.get('name', type=str)
+    email = data.get('email', type=str)
+    password = data.get('password', type=str)
+    role = data.get('role', type=str)
+    company_id = data.get('company_id', type=int)
+    manager_id = data.get('manager_id', type=int)
+
+    # Basic presence check
+    if not all([name, email, password, role, company_id]):
+        return jsonify({'error': 'Missing required fields (name, email, password, role, company_id)'}), 400
+    
+    if role not in ['Employee', 'Manager', 'Admin']:
         return jsonify({'error': 'Invalid role specified'}), 400
 
-    if User.query.filter_by(email=data['email']).first():
+    if User.query.filter_by(email=email).first():
         return jsonify({'error': 'User with this email already exists'}), 400
 
     # Ensure manager_id is valid if provided
-    manager_id = data.get('manager_id')
     if manager_id:
         manager = User.query.get(manager_id)
         if not manager or manager.role not in ['Manager', 'Admin']:
              return jsonify({'error': 'Invalid manager_id provided'}), 400
 
     user = User(
-        name=data['name'],
-        email=data['email'],
-        password=data['password'], # WARNING: plaintext
-        role=data['role'],
-        company_id=data['company_id'],
+        name=name,
+        email=email,
+        password=password, # WARNING: plaintext
+        role=role,
+        company_id=company_id,
         manager_id=manager_id
     )
 
@@ -323,19 +348,20 @@ def update_user_by_admin(user_id):
 
     # Update fields if present in data
     if 'name' in data:
-        user.name = data['name']
+        user.name = data.get('name', type=str)
     
     if 'email' in data:
+        new_email = data.get('email', type=str)
         # Check if new email is unique (excluding self)
-        if User.query.filter(User.email == data['email'], User.id != user_id).first():
+        if User.query.filter(User.email == new_email, User.id != user_id).first():
              return jsonify({'error': 'Email already in use'}), 400
-        user.email = data['email']
+        user.email = new_email
     
     if 'role' in data and data['role'] in ['Employee', 'Manager', 'Admin']:
         user.role = data['role']
     
     if 'manager_id' in data:
-        manager_id = data['manager_id']
+        manager_id = data.get('manager_id', type=int)
         if manager_id is not None:
             # Check if manager is valid
             manager = User.query.get(manager_id)
@@ -345,7 +371,7 @@ def update_user_by_admin(user_id):
     
     if 'password' in data and data['password']:
          # WARNING: plaintext update
-        user.password = data['password']
+        user.password = data.get('password', type=str)
 
     db.session.commit()
 
@@ -395,13 +421,12 @@ def submit_expense():
         if field not in data:
             return jsonify({'error': f'Missing required field: {field}'}), 400
     
-    # Get the submitting user to find their manager
+    # Get the submitting user
     user = User.query.get(data['user_id'])
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
     # Create the expense
-    # Parse date from frontend, fallback to current UTC date if missing or malformed
     date_str = data.get('date')
     try:
         if date_str:
@@ -409,7 +434,6 @@ def submit_expense():
         else:
             date_obj = datetime.utcnow().date()
     except (ValueError, TypeError):
-        # This fallback is now correctly used if the frontend date is invalid
         date_obj = datetime.utcnow().date()
 
     expense = Expense(
@@ -420,24 +444,43 @@ def submit_expense():
         amount=float(data['amount']),
         currency=data['currency'],
         category=data.get('category', 'Other'),
-        date=date_obj, # This line now works correctly as the model has the 'date' field.
+        date=date_obj,
         status='Pending'
     )
     
     db.session.add(expense)
     db.session.flush()  # Get expense.id
+
+    # FIX: Determine all approvers (Direct Manager + all other Managers/Admins)
+    approver_ids = set()
     
-    # Initialize the first approval step (manager approval)
+    # 1. Add Direct Manager (if exists)
     if user.manager_id:
-        first_step = ApprovalStep(
-            expense_id=expense.id,
-            approver_id=user.manager_id,
-            sequence=1,
-            status='Waiting'
-        )
-        db.session.add(first_step)
+        approver_ids.add(user.manager_id)
+
+    # 2. Add all other Managers and Admins (excluding the submitter)
+    all_managers_and_admins = User.query.filter(
+        (User.role == 'Manager') | (User.role == 'Admin'),
+        User.id != user.id
+    ).all()
+    
+    for approver in all_managers_and_admins:
+        approver_ids.add(approver.id)
+
+    # Create approval steps for all identified approvers
+    if approver_ids:
+        for approver_id in approver_ids:
+            first_step = ApprovalStep(
+                expense_id=expense.id,
+                approver_id=approver_id,
+                sequence=1, # All initial approvals are parallel (sequence 1)
+                status='Waiting'
+            )
+            db.session.add(first_step)
+        
+        expense.status = 'Pending' # Explicitly set to Pending if approval steps were created
     else:
-        # If no manager, auto-approve (edge case for demo)
+        # If no manager/admin exists, auto-approve
         expense.status = 'Approved'
     
     db.session.commit()
@@ -453,6 +496,7 @@ def get_approval_queue(user_id):
     """Get expenses waiting for this user's approval"""
     
     # Find all approval steps where this user is the approver and status is 'Waiting'
+    # NOTE: Since all initial steps are Sequence 1, the sequential check logic below is mainly for future expansion (Sequence 2, 3, etc.)
     waiting_steps = ApprovalStep.query.filter_by(
         approver_id=user_id,
         status='Waiting'
@@ -462,6 +506,8 @@ def get_approval_queue(user_id):
     approval_queue = []
     for step in waiting_steps:
         # Before adding, check if there is an earlier step that is NOT approved/rejected (Sequential Check)
+        # This checks if a *preceding* step in the sequence is still pending.
+        # Since we only use sequence=1 currently, this check is bypassed.
         preceding_step_pending = ApprovalStep.query.filter(
             ApprovalStep.expense_id == step.expense_id,
             ApprovalStep.sequence < step.sequence,
@@ -470,9 +516,10 @@ def get_approval_queue(user_id):
 
         # Only add to queue if this is the first step OR the preceding step has been approved.
         if not preceding_step_pending:
-            expense_data = step.expense.to_dict()
+            expense_data = step.expense.to_dict(include_steps=True) # Ensure steps are included for frontend grouping
             expense_data['approval_step_id'] = step.id
             expense_data['approval_sequence'] = step.sequence
+            
             approval_queue.append(expense_data)
     
     return jsonify({
@@ -483,7 +530,7 @@ def get_approval_queue(user_id):
 
 @app.route('/api/approvals/<int:step_id>', methods=['PUT'])
 def process_approval(step_id):
-    """Approve or reject an approval step with sequential logic"""
+    """Approve or reject an approval step with parallel/sequential logic"""
     data = request.json
     decision = data.get('decision')  # 'approved' or 'rejected'
     comments = data.get('comments', '')
@@ -508,63 +555,29 @@ def process_approval(step_id):
     
     if decision == 'rejected':
         # If rejected, set entire expense to rejected and terminate workflow
+        # Mark ALL waiting steps for this expense as rejected/skipped.
         expense.status = 'Rejected'
+        ApprovalStep.query.filter_by(
+            expense_id=expense.id,
+            status='Waiting'
+        ).update({'status': 'Skipped', 'comments': 'Rejected by another approver'}, synchronize_session=False)
     else:
-        # If approved, check for next approver in sequence
+        # If approved (parallel approval at Sequence 1)
         
-        next_sequence = step.sequence + 1
+        # Check if ALL other sequence 1 steps for this expense are now approved or already rejected/skipped
+        all_sequence_1_steps = ApprovalStep.query.filter_by(
+            expense_id=expense.id,
+            sequence=1
+        ).all()
         
-        # --- Sequential Approval Logic ---
+        is_fully_approved_at_seq_1 = all(
+            s.status in ('Approved', 'Skipped') for s in all_sequence_1_steps
+        )
         
-        # Check for the next defined approval step (e.g., Director, Admin)
-        # For the MVP, we assume the next step is Admin if the amount is high.
-        
-        next_step = ApprovalStep.query.filter(
-            ApprovalStep.expense_id == expense.id,
-            ApprovalStep.sequence == next_sequence
-        ).first()
-
-        if next_step:
-            # Check for conditional escalation here (e.g., if > $500, go to Admin)
-            admin = User.query.filter_by(company_id=expense.company_id, role='Admin').first()
-
-            # Simple escalation check: If current step was Manager (seq 1) and amount > 500, escalate.
-            if step.sequence == 1 and expense.amount > 500 and admin:
-                # Update the existing next_step approver to be the Admin for seq 2 (if not already set)
-                # In the current seeder, there is no pre-defined Seq 2, so we create it if needed.
-                
-                # For this simple MVP, we will only check if there is a next step
-                # and leave the sequence logic simple: just activate the next step.
-                
-                # Check if we need to manually create the next step (Admin)
-                if not next_step:
-                    # If we decide to escalate to Admin (id=1 is Admin) if amount > 500
-                    if expense.amount > 500 and admin and admin.id != step.approver_id:
-                        new_step = ApprovalStep(
-                            expense_id=expense.id,
-                            approver_id=admin.id,
-                            sequence=next_sequence,
-                            status='Waiting'
-                        )
-                        db.session.add(new_step)
-                        expense.status = 'Pending'
-                    else:
-                        # No escalation needed, finalize approval
-                        expense.status = 'Approved'
-                
-                # If a next step was already planned (e.g., pre-seeded as Director)
-                else:
-                    # Mark expense as pending and wait for the pre-defined next step
-                    expense.status = 'Pending'
-            
-            # If sequence 1 was low amount, or if this step was already Admin (final step)
-            else:
-                # No further step defined/needed based on simple logic, finalize approval
-                expense.status = 'Approved'
-        else:
-            # No next step found in the database, expense is fully approved
+        if is_fully_approved_at_seq_1:
+            # All Sequence 1 managers/admins have acted. Finalize approval.
             expense.status = 'Approved'
-    
+
     db.session.commit()
     
     return jsonify({
@@ -622,7 +635,7 @@ def get_user_expense_history(user_id):
     
     return jsonify({
         'success': True,
-        'expenses': [exp.to_dict() for exp in expenses]
+        'expenses': [exp.to_dict(include_steps=True) for exp in expenses]
     }), 200
 
 
@@ -635,12 +648,16 @@ def get_all_expenses():
     page = request.args.get('page', default=1, type=int)
     per_page = request.args.get('per_page', default=20, type=int)
 
-    pagination = Expense.query.paginate(page=page, per_page=per_page, error_out=False)
+    # FIX: Add ordering by submission date to ensure a consistent result set for pagination
+    pagination = Expense.query.order_by(Expense.submitted_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
     expenses = pagination.items
 
     return jsonify({
         'success': True,
-        'expenses': [exp.to_dict() for exp in expenses],
+        # Ensure steps are included in to_dict for comprehensive admin view
+        'expenses': [exp.to_dict(include_steps=True) for exp in expenses], 
         'page': page,
         'per_page': per_page,
         'total': pagination.total,

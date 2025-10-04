@@ -72,7 +72,7 @@ const App = () => {
 
     // Tab State
     const [employeeTab, setEmployeeTab] = useState('submit');
-    const [adminTab, setAdminTab] = useState('expenses'); // 'expenses', 'users'
+    const [adminTab, setAdminTab] = useState('expenses'); // 'expenses', 'users', 'all', 'pending', 'approved', 'rejected'
     
     // --- Utility Functions ---
     const showToast = (message, type = 'success') => {
@@ -105,6 +105,7 @@ const App = () => {
                 return 'bg-red-500 text-white';
             case 'Waiting':
             case 'Pending':
+            case 'Skipped':
             default:
                 return 'bg-yellow-500 text-white';
         }
@@ -137,8 +138,11 @@ const App = () => {
                 } else if (data.user.role === 'Manager') {
                     fetchApprovalQueue(data.user.id);
                 } else if (data.user.role === 'Admin') {
+                    // Fetch all data necessary for Admin view
                     fetchAllExpenses();
                     fetchAllUsers();
+                    // Reset tab state to default expense view if coming from login
+                    setAdminTab('all'); 
                 }
             } else {
                 setLoginError(data.error || 'Login failed. Check credentials.');
@@ -245,6 +249,7 @@ const App = () => {
         }
     };
     
+    // FIX: This now groups expenses to avoid showing duplicates in the queue
     const fetchApprovalQueue = async (userId) => {
         setLoadingQueue(true);
         try {
@@ -252,9 +257,25 @@ const App = () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
-                setApprovalQueue(data.approvals);
+                // Group the received approval steps by expense ID
+                const expenseMap = data.approvals.reduce((acc, expense) => {
+                    const existing = acc[expense.id] || { ...expense, approval_steps: expense.approval_steps };
+
+                    // Find the approval step relevant to the current user
+                    const userStep = expense.approval_steps.find(s => s.approver_id === userId);
+                    
+                    // Add the relevant step ID needed for processing the approval
+                    // This is the step ID the manager/admin will approve/reject.
+                    existing.approval_step_id = userStep ? userStep.id : null; 
+                    
+                    acc[expense.id] = existing;
+                    return acc;
+                }, {});
+
+                const uniqueExpenses = Object.values(expenseMap);
+                setApprovalQueue(uniqueExpenses);
                 
-                data.approvals.forEach(expense => {
+                uniqueExpenses.forEach(expense => {
                     if (expense.currency !== 'USD') {
                         fetchConvertedAmount(expense.id, expense.amount, expense.currency);
                     }
@@ -300,8 +321,15 @@ const App = () => {
 
             if (response.ok && data.success) {
                 showToast(`✅ Expense ${decision} successfully!`, 'success');
-                fetchApprovalQueue(currentUser.id);
-                if (currentUser.role === 'Admin') fetchAllExpenses();
+                // Re-fetch queue and history/all expenses to update state
+                if (currentUser.role === 'Manager' || currentUser.role === 'Admin') {
+                    fetchApprovalQueue(currentUser.id);
+                }
+                if (currentUser.role === 'Admin') {
+                    fetchAllExpenses();
+                } else if (currentUser.role === 'Employee') {
+                    fetchEmployeeHistory(currentUser.id);
+                }
             } else {
                 showToast('❌ ' + (data.error || 'Action failed'), 'error');
             }
@@ -441,17 +469,20 @@ const App = () => {
                             </div>
                             
                             <div className="mt-4 pt-3 border-t border-gray-100">
-                                <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">Approval Flow</h4>
+                                <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">Approval Flow (Parallel Check)</h4>
                                 <ol className="relative border-l border-gray-300 ml-4">
-                                    {/* FIX: Use default empty array to prevent .map() on undefined */}
+                                    {/* Display all approval steps for this expense. Added null check for robustness. */}
                                     {(expense.approval_steps || []).map(step => (
                                         <li key={step.id} className="ml-6 flex items-start space-x-2 mb-3">
                                             <span className={`absolute flex items-center justify-center w-5 h-5 rounded-full -left-2.5 ring-4 ring-white ${getStatusStyle(step.status)}`}>
-                                                {step.status === 'Approved' ? '✓' : step.status === 'Rejected' ? '✗' : '...'}
+                                                {step.status === 'Approved' ? '✓' : step.status === 'Rejected' ? '✗' : step.status === 'Skipped' ? '—' : '...'}
                                             </span>
                                             <div className='flex flex-col text-gray-800'>
-                                                <p className="text-sm font-semibold">{step.approver_name} (Step {step.sequence})</p>
-                                                <p className="text-xs text-gray-500">{step.comments || (step.status === 'Waiting' ? 'Awaiting Review' : 'No comments')}</p>
+                                                <p className="text-sm font-semibold">{step.approver_name} (Seq {step.sequence})</p>
+                                                <p className="text-xs text-gray-500">
+                                                    {step.comments || (step.status === 'Waiting' ? 'Awaiting Review' : 
+                                                    step.status === 'Skipped' ? 'Skipped/Terminated' : 'No comments provided')}
+                                                </p>
                                             </div>
                                         </li>
                                     ))}
@@ -463,8 +494,9 @@ const App = () => {
             )}
         </div>
     );
-    
-    // Admin User Management Component
+
+
+    // Admin User Management Component (kept separate for clarity)
     const AdminUserManagement = () => (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* User Form (Create/Edit) */}
@@ -547,7 +579,7 @@ const App = () => {
                 <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl shadow-md border border-gray-200">
                     <h3 className="text-2xl font-bold text-gray-800">All Users ({allUsers.length})</h3>
                     <button onClick={fetchAllUsers} disabled={isUserManagementLoading}
-                        className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md disabled:opacity-50">
+                        className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition font-semibold shadow-md disabled:opacity-50">
                         {isUserManagementLoading ? 'Loading...' : '🔄 Refresh List'}
                     </button>
                 </div>
@@ -585,6 +617,84 @@ const App = () => {
             </div>
         </div>
     );
+
+    // Manager Approval Item Component - Used in Manager View to display one unique expense
+    const ApprovalQueueItem = ({ expense, currentUser, handleApproval, convertedAmounts }) => {
+        // Find the specific step ID relevant to the currentUser for this expense
+        const currentUserStep = expense.approval_steps.find(step => step.approver_id === currentUser.id);
+        const stepId = currentUserStep ? currentUserStep.id : null;
+        
+        // Determine if this user has already acted on this expense
+        const isWaiting = currentUserStep && currentUserStep.status === 'Waiting';
+
+        // Display current status for the current user
+        const statusText = isWaiting ? 'Awaiting your action' : currentUserStep?.status || 'Error';
+        const statusColor = getStatusStyle(statusText.includes('Awaiting') ? 'Waiting' : currentUserStep?.status);
+        
+        // Show status of other approvers
+        const otherSteps = expense.approval_steps.filter(step => step.approver_id !== currentUser.id);
+        const pendingCount = otherSteps.filter(s => s.status === 'Waiting').length;
+        const approvedCount = otherSteps.filter(s => s.status === 'Approved').length;
+        const totalSteps = expense.approval_steps.length;
+
+
+        return (
+            <div className={`p-5 transition duration-200 hover:bg-gray-50 ${isWaiting ? 'bg-yellow-50/50' : 'bg-white'}`}>
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                    <div className="flex-1 space-y-2">
+                        {/* Expense Details */}
+                        <div className="flex items-start gap-3">
+                            <div className="flex-1 min-w-0">
+                                <h3 className="text-lg font-bold text-gray-800 truncate">{getCategoryIcon(expense.category)} {expense.title}</h3>
+                                <div className="flex flex-wrap items-center gap-3 mt-1 text-sm text-gray-500">
+                                    <span className="font-semibold">👤 {expense.submitter_name}</span>
+                                    <span>| ID: #{expense.id}</span>
+                                    <span>| 📅 {new Date(expense.submitted_at).toLocaleDateString()}</span>
+                                </div>
+                            </div>
+                        </div>
+                        {/* Status and Amounts */}
+                        <div className="flex flex-wrap items-center gap-4 pt-2">
+                            <div className="bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 shadow-inner">
+                                <p className="text-xs text-gray-500 font-medium">Original Amount</p>
+                                <p className="text-xl font-bold text-blue-800">{expense.amount.toFixed(2)} {expense.currency}</p>
+                            </div>
+                            {expense.currency !== 'USD' && (
+                                <div className="bg-sky-50 px-4 py-2 rounded-lg border border-sky-200 shadow-inner">
+                                    <p className="text-xs text-sky-600 font-medium">USD Value</p>
+                                    <p className="text-xl font-bold text-sky-700">
+                                        {convertedAmounts[expense.id] ? `$${convertedAmounts[expense.id].toFixed(2)}` : '...'}
+                                    </p>
+                                </div>
+                            )}
+                            {/* Parallel Approval Progress Indicator */}
+                            <div className="bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-200 shadow-inner">
+                                <p className="text-xs text-indigo-600 font-medium">Parallel Approval Status</p>
+                                <p className="text-xl font-bold text-indigo-700">
+                                    {approvedCount} / {totalSteps - 1} Approved
+                                </p>
+                                <p className="text-xs text-indigo-500">{pendingCount} pending reviews</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-3 mt-4 lg:mt-0 lg:flex-row lg:w-fit w-full">
+                        <button onClick={() => handleApproval(stepId, 'approved')}
+                            className="flex-1 px-5 py-2.5 bg-green-500 text-white rounded-lg font-bold hover:bg-green-600 transition-all shadow-md shadow-green-500/50 transform hover:scale-[1.01] disabled:opacity-50"
+                            disabled={!isWaiting || !stepId}>
+                            ✓ Approve
+                        </button>
+                        <button onClick={() => handleApproval(stepId, 'rejected')}
+                            className="flex-1 px-5 py-2.5 bg-red-500 text-white rounded-lg font-bold hover:bg-red-600 transition-all shadow-md shadow-red-500/50 transform hover:scale-[1.01] disabled:opacity-50"
+                            disabled={!isWaiting || !stepId}>
+                            ✗ Reject
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
 
     return (
@@ -723,9 +833,9 @@ const App = () => {
                 {currentUser?.role === 'Manager' && (
                     <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-gray-200">
                         <div className="bg-indigo-600 text-white px-6 py-4 flex justify-between items-center shadow-lg">
-                            <h2 className="text-xl font-bold">Approval Queue</h2>
+                            <h2 className="text-xl font-bold">Approval Queue (Parallel Review)</h2>
                             <button onClick={() => fetchApprovalQueue(currentUser.id)}
-                                className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md">
+                                className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition font-semibold shadow-md">
                                 🔄 Refresh Queue
                             </button>
                         </div>
@@ -733,50 +843,15 @@ const App = () => {
                         : approvalQueue.length === 0 ? (<div className="p-12 text-center text-gray-500">No pending approvals.</div>)
                         : (
                             <div className="overflow-x-auto divide-y divide-gray-100">
+                                {/* FIX: Render the custom ApprovalQueueItem component */}
                                 {approvalQueue.map((expense) => (
-                                    <div key={expense.id} className={`p-5 transition duration-200 hover:bg-gray-50`}>
-                                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                                            <div className="flex-1 space-y-2">
-                                                {/* Expense Details */}
-                                                <div className="flex items-start gap-3">
-                                                    <div className="flex-1 min-w-0">
-                                                        <h3 className="text-lg font-bold text-gray-800 truncate">{getCategoryIcon(expense.category)} {expense.title}</h3>
-                                                        <div className="flex flex-wrap items-center gap-3 mt-1 text-sm text-gray-500">
-                                                            <span className="font-semibold">👤 {expense.submitter_name}</span>
-                                                            <span>| ID: #{expense.id}</span>
-                                                            <span>| 📅 {new Date(expense.submitted_at).toLocaleDateString()}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                {/* Amounts */}
-                                                <div className="flex flex-wrap items-center gap-4 pt-2">
-                                                    <div className="bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 shadow-inner">
-                                                        <p className="text-xs text-gray-500 font-medium">Original Amount</p>
-                                                        <p className="text-xl font-bold text-blue-800">{expense.amount.toFixed(2)} {expense.currency}</p>
-                                                    </div>
-                                                    {expense.currency !== 'USD' && (
-                                                        <div className="bg-sky-50 px-4 py-2 rounded-lg border border-sky-200 shadow-inner">
-                                                            <p className="text-xs text-sky-600 font-medium">USD Value</p>
-                                                            <p className="text-xl font-bold text-sky-700">
-                                                                {convertedAmounts[expense.id] ? `$${convertedAmounts[expense.id].toFixed(2)}` : '...'}
-                                                            </p>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            {/* Action Buttons */}
-                                            <div className="flex gap-3 mt-4 lg:mt-0 lg:flex-row lg:w-fit w-full">
-                                                <button onClick={() => handleApproval(expense.approval_step_id, 'approved')}
-                                                    className="flex-1 px-5 py-2.5 bg-green-500 text-white rounded-lg font-bold hover:bg-green-600 transition-all shadow-md shadow-green-500/50 transform hover:scale-[1.01]">
-                                                    ✓ Approve
-                                                </button>
-                                                <button onClick={() => handleApproval(expense.approval_step_id, 'rejected')}
-                                                    className="flex-1 px-5 py-2.5 bg-red-500 text-white rounded-lg font-bold hover:bg-red-600 transition-all shadow-md shadow-red-500/50 transform hover:scale-[1.01]">
-                                                    ✗ Reject
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <ApprovalQueueItem
+                                        key={expense.id}
+                                        expense={expense}
+                                        currentUser={currentUser}
+                                        handleApproval={handleApproval}
+                                        convertedAmounts={convertedAmounts}
+                                    />
                                 ))}
                             </div>
                         )}
@@ -791,7 +866,7 @@ const App = () => {
                             {/* Expense Tab */}
                             <button key="expenses" onClick={() => { setAdminTab('expenses'); fetchAllExpenses(); }}
                                 className={`flex-1 px-6 py-3 font-bold text-sm uppercase tracking-wide rounded-lg transition-all ${
-                                    adminTab === 'expenses' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
+                                    adminTab === 'expenses' || adminTab === 'all' || adminTab === 'pending' || adminTab === 'approved' || adminTab === 'rejected' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
                                 }`}
                             >
                                 📋 All Expenses
@@ -807,12 +882,12 @@ const App = () => {
                         </div>
                         
                         {/* Admin Expenses View */}
-                        {adminTab === 'expenses' && (
+                        {(adminTab === 'expenses' || adminTab === 'all' || adminTab === 'pending' || adminTab === 'approved' || adminTab === 'rejected') && (
                             <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-gray-200">
                                 <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center shadow-lg">
                                     <h2 className="text-xl font-bold">All Expenses Overview</h2>
                                     <button onClick={fetchAllExpenses}
-                                        className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md">
+                                        className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition font-semibold shadow-md">
                                         🔄 Refresh Data
                                     </button>
                                 </div>
@@ -837,6 +912,7 @@ const App = () => {
                                 {allExpenses.length === 0 ? (<div className="p-12 text-center text-gray-500">No expenses found.</div>) : (
                                     <div className="overflow-x-auto divide-y divide-gray-100">
                                         {allExpenses
+                                            // FIX: Convert the expense status to lowercase for comparison, making the filter case-insensitive.
                                             .filter(exp => adminTab === 'all' || exp.status.toLowerCase() === adminTab)
                                             .map((expense) => (
                                                 <div key={expense.id} className={`p-5 transition duration-200 hover:bg-gray-50`}>
@@ -956,7 +1032,7 @@ const App = () => {
                             <p className="text-sm text-gray-500 font-semibold mb-3">Demo Credentials (Password is plaintext)</p>
                             <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 font-medium">
                                 <span className="font-bold text-center text-indigo-600">Admin: admin123</span>
-                                <span className="font-bold text-center text-indigo-600">Manager: manager123</span>
+                                <span className="font-bold text-center text-indigo-600">Manager 1: manager123</span>
                                 <span className="font-bold text-center text-indigo-600">Emp 1: emp123</span>
                             </div>
                         </div>
@@ -967,7 +1043,7 @@ const App = () => {
             {/* Footer */}
             <footer className="max-w-7xl mx-auto px-4 py-8 text-center text-gray-500 text-sm">
                 <p className="font-medium">💼 EXPENSE MANAGER v2.0 - High-Trust Financial Theme</p>
-                <p className="mt-1">Features: Registration, 3-Step Approval, Employee History</p>
+                <p className="mt-1">Features: Registration, Parallel Approval, User Management</p>
             </footer>
             
             <MessageToast message={toastMessage} type={toastType} onClose={() => setToastMessage(null)} />
