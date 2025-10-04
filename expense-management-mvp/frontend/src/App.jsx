@@ -72,7 +72,10 @@ const App = () => {
 
     // Tab State
     const [employeeTab, setEmployeeTab] = useState('submit');
-    const [adminTab, setAdminTab] = useState('expenses'); // 'expenses', 'users', 'all', 'pending', 'approved', 'rejected'
+    // Renamed primary admin tabs for clarity: 'expense_view' holds the expense filters, 'users' is management
+    const [adminTab, setAdminTab] = useState('expense_view'); 
+    const [adminExpenseFilter, setAdminExpenseFilter] = useState('all');
+
     
     // --- Utility Functions ---
     const showToast = (message, type = 'success') => {
@@ -141,8 +144,9 @@ const App = () => {
                     // Fetch all data necessary for Admin view
                     fetchAllExpenses();
                     fetchAllUsers();
-                    // Reset tab state to default expense view if coming from login
-                    setAdminTab('all'); 
+                    // Reset primary admin tab state to expense view
+                    setAdminTab('expense_view'); 
+                    setAdminExpenseFilter('all');
                 }
             } else {
                 setLoginError(data.error || 'Login failed. Check credentials.');
@@ -861,12 +865,12 @@ const App = () => {
                 {/* --- Admin View --- */}
                 {currentUser?.role === 'Admin' && (
                     <div className="space-y-6">
-                        {/* Tabs for Admin */}
+                        {/* Primary Tabs for Admin */}
                         <div className="flex border-b border-gray-300 bg-white shadow-xl rounded-xl overflow-hidden p-1">
                             {/* Expense Tab */}
-                            <button key="expenses" onClick={() => { setAdminTab('expenses'); fetchAllExpenses(); }}
+                            <button key="expense_view" onClick={() => { setAdminTab('expense_view'); fetchAllExpenses(); setAdminExpenseFilter('all'); }}
                                 className={`flex-1 px-6 py-3 font-bold text-sm uppercase tracking-wide rounded-lg transition-all ${
-                                    adminTab === 'expenses' || adminTab === 'all' || adminTab === 'pending' || adminTab === 'approved' || adminTab === 'rejected' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
+                                    adminTab === 'expense_view' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
                                 }`}
                             >
                                 📋 All Expenses
@@ -881,8 +885,8 @@ const App = () => {
                             </button>
                         </div>
                         
-                        {/* Admin Expenses View */}
-                        {(adminTab === 'expenses' || adminTab === 'all' || adminTab === 'pending' || adminTab === 'approved' || adminTab === 'rejected') && (
+                        {/* Admin Expenses View (Show if adminTab is 'expense_view') */}
+                        {adminTab === 'expense_view' && (
                             <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-gray-200">
                                 <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center shadow-lg">
                                     <h2 className="text-xl font-bold">All Expenses Overview</h2>
@@ -891,19 +895,19 @@ const App = () => {
                                         🔄 Refresh Data
                                     </button>
                                 </div>
-                                {/* Filter Tabs */}
+                                {/* Filter Tabs (These update the adminExpenseFilter state) */}
                                 <div className="flex border-b border-gray-200 px-6 bg-gray-50">
-                                    {['all', 'pending', 'approved', 'rejected'].map((tab) => (
-                                        <button key={tab} onClick={() => setAdminTab(tab)}
+                                    {['all', 'pending', 'approved', 'rejected'].map((filter) => (
+                                        <button key={filter} onClick={() => setAdminExpenseFilter(filter)}
                                             className={`px-4 py-3 font-bold text-sm uppercase tracking-wide transition-all ${
-                                                adminTab === tab ? 'text-sky-600 border-b-2 border-sky-600' : 'text-gray-500 hover:text-gray-700'
+                                                adminExpenseFilter === filter ? 'text-sky-600 border-b-2 border-sky-600' : 'text-gray-500 hover:text-gray-700'
                                             }`}
-                                            style={{ borderBottom: adminTab === tab ? '2px solid #0284C7' : '2px solid transparent' }}
+                                            style={{ borderBottom: adminExpenseFilter === filter ? '2px solid #0284C7' : '2px solid transparent' }}
                                         >
-                                            {tab === 'all' && '📋 All'}
-                                            {tab === 'pending' && '⏳ Pending'}
-                                            {tab === 'approved' && '✅ Approved'}
-                                            {tab === 'rejected' && '❌ Rejected'}
+                                            {filter === 'all' && '📋 All'}
+                                            {filter === 'pending' && '⏳ Pending'}
+                                            {filter === 'approved' && '✅ Approved'}
+                                            {filter === 'rejected' && '❌ Rejected'}
                                         </button>
                                     ))}
                                 </div>
@@ -912,8 +916,8 @@ const App = () => {
                                 {allExpenses.length === 0 ? (<div className="p-12 text-center text-gray-500">No expenses found.</div>) : (
                                     <div className="overflow-x-auto divide-y divide-gray-100">
                                         {allExpenses
-                                            // FIX: Convert the expense status to lowercase for comparison, making the filter case-insensitive.
-                                            .filter(exp => adminTab === 'all' || exp.status.toLowerCase() === adminTab)
+                                            // FIX: Filter based on adminExpenseFilter state
+                                            .filter(exp => adminExpenseFilter === 'all' || exp.status.toLowerCase() === adminExpenseFilter)
                                             .map((expense) => (
                                                 <div key={expense.id} className={`p-5 transition duration-200 hover:bg-gray-50`}>
                                                     <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -946,8 +950,8 @@ const App = () => {
                                                     </div>
                                                 </div>
                                             ))}
-                                        {allExpenses.filter(exp => adminTab === 'all' || exp.status.toLowerCase() === adminTab).length === 0 && (
-                                            <div className="p-12 text-center text-gray-500">No {adminTab} expenses found</div>
+                                        {allExpenses.filter(exp => adminExpenseFilter === 'all' || exp.status.toLowerCase() === adminExpenseFilter).length === 0 && (
+                                            <div className="p-12 text-center text-gray-500">No {adminExpenseFilter} expenses found</div>
                                         )}
                                     </div>
                                 )}
