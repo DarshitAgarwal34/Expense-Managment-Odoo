@@ -1,739 +1,978 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+// Since this version needs to be self-contained for the canvas, 
+// we assume React and ReactDOM are globally available or imported 
+// via a script tag in a surrounding index.html, but we keep the imports 
+// for modern syntax consistency.
 
 const API_BASE = 'http://localhost:5000/api';
 
-function App() {
-  // Authentication State
-  const [currentUser, setCurrentUser] = useState(null);
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Expense Submission State (Employee)
-  const [expenseForm, setExpenseForm] = useState({
-    title: '',
-    description: '',
-    amount: '',
-    currency: 'USD',
-    category: 'Meals'
-  });
-  const [submitMessage, setSubmitMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Approval Queue State (Manager)
-  const [approvalQueue, setApprovalQueue] = useState([]);
-  const [convertedAmounts, setConvertedAmounts] = useState({});
-  const [loadingQueue, setLoadingQueue] = useState(false);
-
-  // All Expenses State (Admin)
-  const [allExpenses, setAllExpenses] = useState([]);
-
-  // Tab State
-  const [activeTab, setActiveTab] = useState('pending');
-
-  // ==================== Authentication ====================
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoginError('');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword })
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setCurrentUser(data.user);
-        setLoginEmail('');
-        setLoginPassword('');
-        
-        if (data.user.role === 'Manager') {
-          fetchApprovalQueue(data.user.id);
-        } else if (data.user.role === 'Admin') {
-          fetchAllExpenses();
-        }
-      } else {
-        setLoginError(data.error || 'Login failed');
-      }
-    } catch (error) {
-      setLoginError('Network error. Please try again.');
-      console.error('Login error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setApprovalQueue([]);
-    setAllExpenses([]);
-    setConvertedAmounts({});
-  };
-
-  // ==================== Employee: Submit Expense ====================
-
-  const handleExpenseSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitMessage('');
-    setIsSubmitting(true);
-
-    if (!expenseForm.title || !expenseForm.amount) {
-      setSubmitMessage('Please fill in all required fields');
-      setIsSubmitting(false);
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/expenses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: currentUser.id,
-          title: expenseForm.title,
-          description: expenseForm.description,
-          amount: parseFloat(expenseForm.amount),
-          currency: expenseForm.currency,
-          category: expenseForm.category
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setSubmitMessage('success');
-        setExpenseForm({
-          title: '',
-          description: '',
-          amount: '',
-          currency: 'USD',
-          category: 'Meals'
-        });
-        setTimeout(() => setSubmitMessage(''), 3000);
-      } else {
-        setSubmitMessage('error');
-      }
-    } catch (error) {
-      setSubmitMessage('error');
-      console.error('Submit error:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // ==================== Manager: Approval Queue ====================
-
-  const fetchApprovalQueue = async (userId) => {
-    setLoadingQueue(true);
-    try {
-      const response = await fetch(`${API_BASE}/approvals/${userId}`);
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setApprovalQueue(data.approvals);
-        
-        data.approvals.forEach(expense => {
-          if (expense.currency !== 'USD') {
-            fetchConvertedAmount(expense.id, expense.amount, expense.currency);
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching approval queue:', error);
-    } finally {
-      setLoadingQueue(false);
-    }
-  };
-
-  const fetchConvertedAmount = async (expenseId, amount, fromCurrency) => {
-    try {
-      const response = await fetch(
-        `${API_BASE}/utility/currency?from=${fromCurrency}&to=USD&amount=${amount}`
-      );
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setConvertedAmounts(prev => ({
-          ...prev,
-          [expenseId]: data.converted_amount
-        }));
-      }
-    } catch (error) {
-      console.error('Currency conversion error:', error);
-    }
-  };
-
-  const handleApproval = async (stepId, decision) => {
-    const comments = decision === 'rejected' 
-      ? prompt('Enter rejection reason:') 
-      : prompt('Add comments (optional):') || '';
-
-    try {
-      const response = await fetch(`${API_BASE}/approvals/${stepId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, comments })
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        alert(`✅ Expense ${decision === 'approved' ? 'approved' : 'rejected'} successfully!`);
-        fetchApprovalQueue(currentUser.id);
-      } else {
-        alert('❌ ' + (data.error || 'Action failed'));
-      }
-    } catch (error) {
-      alert('❌ Network error');
-      console.error('Approval error:', error);
-    }
-  };
-
-  // ==================== Admin: View All Expenses ====================
-
-  const fetchAllExpenses = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/expenses/all`);
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        setAllExpenses(data.expenses);
-      }
-    } catch (error) {
-      console.error('Error fetching all expenses:', error);
-    }
-  };
-
-  const getCategoryIcon = (category) => {
-    const icons = {
-      'Meals': '🍽️',
-      'Travel': '✈️',
-      'Office Supplies': '📦',
-      'Software': '💻',
-      'Other': '📌'
+// --- Message Toast Component (Professional UI Alert System) ---
+const MessageToast = ({ message, type, onClose }) => {
+    if (!message) return null;
+    const styles = {
+        success: 'bg-green-600 border-green-800',
+        error: 'bg-red-600 border-red-800',
+        warning: 'bg-yellow-600 border-yellow-800'
     };
-    return icons[category] || '📌';
-  };
-
-  const getRoleColor = (role) => {
-    const colors = {
-      'Employee': 'bg-blue-500',
-      'Manager': 'bg-purple-500',
-      'Admin': 'bg-red-500'
-    };
-    return colors[role] || 'bg-gray-500';
-  };
-
-  // ==================== Render ====================
-
-  // Login Screen
-  if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center p-4 relative overflow-hidden">
-        {/* Animated background elements */}
-        <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute -top-40 -left-40 w-80 h-80 bg-white rounded-full mix-blend-overlay filter blur-xl opacity-20 animate-pulse"></div>
-          <div className="absolute -bottom-40 -right-40 w-80 h-80 bg-white rounded-full mix-blend-overlay filter blur-xl opacity-20 animate-pulse" style={{animationDelay: '1s'}}></div>
-          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-white rounded-full mix-blend-overlay filter blur-xl opacity-10 animate-pulse" style={{animationDelay: '2s'}}></div>
+        <div className={`fixed bottom-5 right-5 p-4 rounded-lg shadow-xl text-white font-semibold border-l-4 ${styles[type]} transition-opacity duration-300 ease-out z-[999]`}>
+            {message}
+            <button onClick={onClose} className="ml-4 text-white opacity-75 hover:opacity-100 font-extrabold text-lg leading-none">&times;</button>
         </div>
-
-        <div className="relative bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 w-full max-w-md border border-white/20 transform hover:scale-105 transition-all duration-300">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
-              <span className="text-4xl">💰</span>
-            </div>
-            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 mb-2">
-              Expense Manager
-            </h1>
-            <p className="text-gray-600 font-medium">Smart expense tracking for modern teams</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div className="relative">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Email Address
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400">
-                  📧
-                </span>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-indigo-200 focus:border-indigo-500 transition-all outline-none"
-                  placeholder="user@company.com"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="relative">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Password
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400">
-                  🔒
-                </span>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-indigo-200 focus:border-indigo-500 transition-all outline-none"
-                  placeholder="Enter your password"
-                  required
-                />
-              </div>
-            </div>
-
-            {loginError && (
-              <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg animate-shake">
-                <span className="font-medium">⚠️ {loginError}</span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3.5 px-6 rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Signing in...
-                </span>
-              ) : (
-                'Sign In'
-              )}
-            </button>
-          </form>
-
-          <div className="mt-8 pt-6 border-t border-gray-200">
-            <p className="text-sm text-gray-600 mb-3 font-semibold text-center">🎭 Demo Accounts</p>
-            <div className="space-y-2">
-              <div className="bg-gradient-to-r from-blue-50 to-blue-100 px-4 py-2.5 rounded-lg border border-blue-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-blue-800">👤 Employee</span>
-                  <span className="text-xs text-blue-600 font-mono">emp123</span>
-                </div>
-                <p className="text-xs text-blue-700 mt-1 font-medium">employee1@company.com</p>
-              </div>
-              <div className="bg-gradient-to-r from-purple-50 to-purple-100 px-4 py-2.5 rounded-lg border border-purple-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-purple-800">👔 Manager</span>
-                  <span className="text-xs text-purple-600 font-mono">manager123</span>
-                </div>
-                <p className="text-xs text-purple-700 mt-1 font-medium">manager@company.com</p>
-              </div>
-              <div className="bg-gradient-to-r from-red-50 to-red-100 px-4 py-2.5 rounded-lg border border-red-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-red-800">⚙️ Admin</span>
-                  <span className="text-xs text-red-600 font-mono">admin123</span>
-                </div>
-                <p className="text-xs text-red-700 mt-1 font-medium">admin@company.com</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     );
-  }
+};
 
-  // Main Dashboard (Post-Login)
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Enhanced Header */}
-      <header className="bg-white shadow-md border-b-2 border-indigo-100 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                <span className="text-2xl">💰</span>
-              </div>
-              <div>
-                <h1 className="text-2xl font-black text-gray-800">Expense Manager</h1>
-                <p className="text-sm text-gray-600 flex items-center gap-2">
-                  Welcome, <span className="font-bold text-gray-800">{currentUser.name}</span>
-                  <span className={`px-3 py-1 ${getRoleColor(currentUser.role)} text-white rounded-full text-xs font-bold shadow-md`}>
-                    {currentUser.role}
-                  </span>
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="px-6 py-2.5 bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
-            >
-              🚪 Logout
-            </button>
-          </div>
-        </div>
-      </header>
+// FIX: Changed function declaration to const with export default 
+// to ensure the component is properly exported and imported by the environment, 
+// fixing the "reading 'default'" error.
+const App = () => {
+    // --- Global State ---
+    const [toastMessage, setToastMessage] = useState(null);
+    const [toastType, setToastType] = useState('success');
+    
+    // Authentication State
+    const [currentUser, setCurrentUser] = useState(null);
+    const [loginEmail, setLoginEmail] = useState('');
+    const [loginPassword, setLoginPassword] = useState('');
+    const [loginError, setLoginError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [isRegistering, setIsRegistering] = useState(false);
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        {/* Employee View */}
-        {currentUser.role === 'Employee' && (
-          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8 border border-gray-100">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center">
-                <span className="text-2xl">📝</span>
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-gray-800">Submit New Expense</h2>
-                <p className="text-sm text-gray-600">Fill in the details below</p>
-              </div>
-            </div>
-            
-            <form onSubmit={handleExpenseSubmit} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Expense Title *
-                  </label>
-                  <input
-                    type="text"
-                    value={expenseForm.title}
-                    onChange={(e) => setExpenseForm({...expenseForm, title: e.target.value})}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all outline-none"
-                    placeholder="e.g., Client Lunch Meeting"
-                    required
-                  />
-                </div>
+    // Registration State
+    const [regForm, setRegForm] = useState({ name: '', email: '', password: '' });
+    const [regError, setRegError] = useState('');
+    const [isRegLoading, setIsRegLoading] = useState(false);
 
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Category
-                  </label>
-                  <select
-                    value={expenseForm.category}
-                    onChange={(e) => setExpenseForm({...expenseForm, category: e.target.value})}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all outline-none"
-                  >
-                    <option value="Meals">🍽️ Meals</option>
-                    <option value="Travel">✈️ Travel</option>
-                    <option value="Office Supplies">📦 Office Supplies</option>
-                    <option value="Software">💻 Software</option>
-                    <option value="Other">📌 Other</option>
-                  </select>
-                </div>
+    // Expense Submission State (Employee)
+    const [expenseForm, setExpenseForm] = useState({
+        title: '',
+        description: '',
+        amount: '',
+        currency: 'USD',
+        category: 'Meals',
+        date: new Date().toISOString().substring(0, 10)
+    });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [employeeHistory, setEmployeeHistory] = useState([]);
 
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Amount *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={expenseForm.amount}
-                    onChange={(e) => setExpenseForm({...expenseForm, amount: e.target.value})}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all outline-none"
-                    placeholder="0.00"
-                    required
-                  />
-                </div>
+    // Approval Queue State (Manager)
+    const [approvalQueue, setApprovalQueue] = useState([]);
+    const [convertedAmounts, setConvertedAmounts] = useState({});
+    const [loadingQueue, setLoadingQueue] = useState(false);
 
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    Currency
-                  </label>
-                  <select
-                    value={expenseForm.currency}
-                    onChange={(e) => setExpenseForm({...expenseForm, currency: e.target.value})}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all outline-none"
-                  >
-                    <option value="USD">💵 USD</option>
-                    <option value="EUR">💶 EUR</option>
-                    <option value="GBP">💷 GBP</option>
-                    <option value="INR">💴 INR</option>
-                    <option value="CAD">🍁 CAD</option>
-                  </select>
-                </div>
-              </div>
+    // All Expenses State (Admin)
+    const [allExpenses, setAllExpenses] = useState([]);
+    
+    // Admin User Management State
+    const [allUsers, setAllUsers] = useState([]);
+    const [managers, setManagers] = useState([]);
+    const [isUserManagementLoading, setIsUserManagementLoading] = useState(false);
+    const [userForm, setUserForm] = useState({ id: null, name: '', email: '', password: '', role: 'Employee', manager_id: null });
 
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">
-                  Description
-                </label>
-                <textarea
-                  value={expenseForm.description}
-                  onChange={(e) => setExpenseForm({...expenseForm, description: e.target.value})}
-                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all outline-none resize-none"
-                  rows="4"
-                  placeholder="Provide additional details about this expense..."
-                />
-              </div>
 
-              {submitMessage && (
-                <div className={`px-6 py-4 rounded-xl border-l-4 ${
-                  submitMessage === 'success'
-                    ? 'bg-green-50 border-green-500 text-green-800' 
-                    : 'bg-red-50 border-red-500 text-red-800'
-                }`}>
-                  <span className="font-bold">
-                    {submitMessage === 'success' ? '✅ Expense submitted successfully!' : '❌ Submission failed. Please try again.'}
-                  </span>
-                </div>
-              )}
+    // Tab State
+    const [employeeTab, setEmployeeTab] = useState('submit');
+    const [adminTab, setAdminTab] = useState('expenses'); // 'expenses', 'users'
+    
+    // --- Utility Functions ---
+    const showToast = (message, type = 'success') => {
+        setToastMessage(message);
+        setToastType(type);
+        setTimeout(() => setToastMessage(null), 4000);
+    };
 
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 px-6 rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                {isSubmitting ? (
-                  <span className="flex items-center justify-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Submitting...
-                  </span>
-                ) : (
-                  '🚀 Submit Expense'
-                )}
-              </button>
-            </form>
-          </div>
-        )}
+    const getCategoryIcon = (category) => {
+        const icons = {
+            'Meals': '🍽️', 'Travel': '✈️', 'Office Supplies': '📦', 
+            'Software': '💻', 'Other': '📌'
+        };
+        return icons[category] || '📌';
+    };
 
-        {/* Manager View */}
-        {currentUser.role === 'Manager' && (
-          <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
-            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 px-6 py-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-                  <span className="text-2xl">📋</span>
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-white">Approval Queue</h2>
-                  <p className="text-purple-100 text-sm">{approvalQueue.length} pending approvals</p>
-                </div>
-              </div>
-              <button
-                onClick={() => fetchApprovalQueue(currentUser.id)}
-                className="px-6 py-2.5 bg-white/20 backdrop-blur-sm text-white rounded-xl hover:bg-white/30 transition font-bold border border-white/30"
-              >
-                🔄 Refresh
-              </button>
-            </div>
+    const getRoleColor = (role) => {
+        const colors = {
+            'Employee': 'bg-sky-500', 'Manager': 'bg-indigo-600', 
+            'Admin': 'bg-gray-800'
+        };
+        return colors[role] || 'bg-gray-500';
+    };
 
-            {loadingQueue ? (
-              <div className="p-12 text-center">
-                <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
-                <p className="mt-4 text-gray-600 font-medium">Loading approvals...</p>
-              </div>
-            ) : approvalQueue.length === 0 ? (
-              <div className="p-12 text-center">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-4xl">🎉</span>
-                </div>
-                <p className="text-gray-600 font-medium text-lg">No pending approvals</p>
-                <p className="text-gray-500 text-sm mt-2">You're all caught up!</p>
-              </div>
+    const getStatusStyle = (status) => {
+        switch (status) {
+            case 'Approved':
+                return 'bg-green-500 text-white';
+            case 'Rejected':
+                return 'bg-red-500 text-white';
+            case 'Waiting':
+            case 'Pending':
+            default:
+                return 'bg-yellow-500 text-white';
+        }
+    };
+
+    // ==================== API Handlers ====================
+
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        setLoginError('');
+        setIsLoading(true);
+
+        try {
+            const response = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: loginEmail, password: loginPassword })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                setCurrentUser(data.user);
+                setLoginEmail('');
+                setLoginPassword('');
+                showToast(`Welcome back, ${data.user.name}!`, 'success');
+                
+                if (data.user.role === 'Employee') {
+                    fetchEmployeeHistory(data.user.id);
+                } else if (data.user.role === 'Manager') {
+                    fetchApprovalQueue(data.user.id);
+                } else if (data.user.role === 'Admin') {
+                    fetchAllExpenses();
+                    fetchAllUsers();
+                }
+            } else {
+                setLoginError(data.error || 'Login failed. Check credentials.');
+            }
+        } catch (error) {
+            setLoginError('Network error. Could not connect to API.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleRegistration = async (e) => {
+        e.preventDefault();
+        setRegError('');
+        setIsRegLoading(true);
+
+        try {
+            const response = await fetch(`${API_BASE}/auth/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(regForm)
+            });
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showToast('✅ Account created successfully. Please log in.', 'success');
+                setIsRegistering(false);
+                setLoginEmail(regForm.email);
+                setLoginPassword('');
+                setRegForm({ name: '', email: '', password: '' });
+            } else {
+                setRegError(data.error || 'Registration failed.');
+            }
+        } catch (error) {
+            setRegError('Network error. Could not complete registration.');
+        } finally {
+            setIsRegLoading(false);
+        }
+    };
+
+    const handleLogout = () => {
+        setCurrentUser(null);
+        setApprovalQueue([]);
+        setAllExpenses([]);
+        setEmployeeHistory([]);
+        setAllUsers([]);
+        setManagers([]);
+        setConvertedAmounts({});
+        showToast("Logged out successfully.", 'warning');
+    };
+
+    const fetchEmployeeHistory = async (userId) => {
+        if (!userId) return;
+        try {
+            const response = await fetch(`${API_BASE}/expenses/history/${userId}`);
+            const data = await response.json();
+            if (response.ok && data.success) {
+                setEmployeeHistory(data.expenses);
+            }
+        } catch (error) {
+            console.error('Error fetching employee history:', error);
+        }
+    };
+
+    const handleEmployeeTabChange = (tab) => {
+        setEmployeeTab(tab);
+        if (tab === 'history') {
+            fetchEmployeeHistory(currentUser.id);
+        }
+    };
+
+    const handleExpenseSubmit = async (e) => {
+        e.preventDefault();
+        setIsSubmitting(true);
+
+        try {
+            const response = await fetch(`${API_BASE}/expenses`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: currentUser.id, title: expenseForm.title, description: expenseForm.description,
+                    amount: parseFloat(expenseForm.amount), currency: expenseForm.currency,
+                    category: expenseForm.category, date: expenseForm.date
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showToast('✅ Expense submitted successfully!', 'success');
+                setExpenseForm({
+                    title: '', description: '', amount: '', currency: 'USD', category: 'Meals', date: new Date().toISOString().substring(0, 10)
+                });
+                // Fetch history again to ensure the list is up-to-date and complete
+                fetchEmployeeHistory(currentUser.id); 
+                handleEmployeeTabChange('history');
+            } else {
+                showToast('❌ Submission failed. ' + (data.error || 'Try again.'), 'error');
+            }
+        } catch (error) {
+            showToast('❌ Network error during submission.', 'error');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+    
+    const fetchApprovalQueue = async (userId) => {
+        setLoadingQueue(true);
+        try {
+            const response = await fetch(`${API_BASE}/approvals/${userId}`);
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                setApprovalQueue(data.approvals);
+                
+                data.approvals.forEach(expense => {
+                    if (expense.currency !== 'USD') {
+                        fetchConvertedAmount(expense.id, expense.amount, expense.currency);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching approval queue:', error);
+        } finally {
+            setLoadingQueue(false);
+        }
+    };
+
+    const fetchConvertedAmount = async (expenseId, amount, fromCurrency) => {
+        try {
+            const response = await fetch(
+                `${API_BASE}/utility/currency?from=${fromCurrency}&to=USD&amount=${amount}`
+            );
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                setConvertedAmounts(prev => ({
+                    ...prev,
+                    [expenseId]: data.converted_amount
+                }));
+            }
+        } catch (error) {
+            console.error('Currency conversion error:', error);
+        }
+    };
+
+    const handleApproval = async (stepId, decision) => {
+        const comments = decision === 'rejected' ? 'Rejected due to policy.' : 'Approved.'; 
+        showToast(`Processing ${decision} request...`, 'warning'); 
+
+        try {
+            const response = await fetch(`${API_BASE}/approvals/${stepId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ decision, comments })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showToast(`✅ Expense ${decision} successfully!`, 'success');
+                fetchApprovalQueue(currentUser.id);
+                if (currentUser.role === 'Admin') fetchAllExpenses();
+            } else {
+                showToast('❌ ' + (data.error || 'Action failed'), 'error');
+            }
+        } catch (error) {
+            showToast('❌ Network error', 'error');
+        }
+    };
+    
+    const fetchAllExpenses = async () => {
+        try {
+            const response = await fetch(`${API_BASE}/expenses/all`);
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                setAllExpenses(data.expenses);
+            }
+        } catch (error) {
+            console.error('Error fetching all expenses:', error);
+        }
+    };
+    
+    const fetchAllUsers = async () => {
+        setIsUserManagementLoading(true);
+        try {
+            const response = await fetch(`${API_BASE}/users`);
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                setAllUsers(data.users);
+                // Managers/Admins for the manager dropdown list
+                setManagers(data.users.filter(u => u.role === 'Manager' || u.role === 'Admin'));
+            }
+        } catch (error) {
+            console.error('Error fetching all users:', error);
+        } finally {
+            setIsUserManagementLoading(false);
+        }
+    };
+
+    // Resets the user form to creation state
+    const resetUserForm = () => {
+        setUserForm({ id: null, name: '', email: '', password: '', role: 'Employee', manager_id: null });
+    };
+
+    const handleUserSubmit = async (e) => {
+        e.preventDefault();
+        
+        const isCreating = userForm.id === null;
+        const endpoint = isCreating ? `${API_BASE}/admin/users/create` : `${API_BASE}/admin/users/${userForm.id}`;
+        const method = isCreating ? 'POST' : 'PUT';
+
+        // Prepare payload, excluding manager_id if not selected (null)
+        const payload = { ...userForm };
+        if (!payload.manager_id || payload.manager_id === 'null') {
+             payload.manager_id = null;
+        } else {
+             payload.manager_id = parseInt(payload.manager_id); // Ensure integer ID is sent
+        }
+        
+        // Remove password if updating and field is empty
+        if (!isCreating && !payload.password) {
+            delete payload.password;
+        }
+        
+        // Only Admin can set company_id=1 for this demo
+        if (isCreating) {
+            payload.company_id = currentUser.company_id || 1; 
+        }
+
+        try {
+            const response = await fetch(endpoint, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showToast(`✅ User ${isCreating ? 'created' : 'updated'} successfully!`, 'success');
+                fetchAllUsers();
+                resetUserForm();
+            } else {
+                showToast(`❌ Failed to ${isCreating ? 'create' : 'update'} user. ` + (data.error || 'Try again.'), 'error');
+            }
+        } catch (error) {
+            showToast('❌ Network error during user management.', 'error');
+        }
+    };
+    
+    const handleDeleteUser = async (userId) => {
+        // Using window.confirm temporarily, though best practice is a custom modal UI.
+        if (!window.confirm("Are you sure you want to delete this user? This action cannot be undone and reports will be reassigned.")) return;
+
+        try {
+            const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
+                method: 'DELETE',
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showToast(`🗑️ User deleted successfully.`, 'warning');
+                fetchAllUsers();
+            } else {
+                showToast(`❌ Failed to delete user. ` + (data.error || 'Try again.'), 'error');
+            }
+        } catch (error) {
+            showToast('❌ Network error during user deletion.', 'error');
+        }
+    };
+
+
+    // ==================== Render Components ====================
+
+    // Expense History Component
+    const EmployeeHistory = () => (
+        <div className="space-y-6">
+            <h3 className="text-2xl font-bold text-gray-700 border-b border-gray-200 pb-3">Your Expense History</h3>
+            {employeeHistory.length === 0 ? (
+                <p className="text-gray-500 p-6 bg-white rounded-xl border shadow-lg">No expenses submitted yet. Get started!</p>
             ) : (
-              <div className="overflow-x-auto">
-                <div className="inline-block min-w-full align-middle">
-                  <div className="overflow-hidden">
-                    {approvalQueue.map((expense, index) => (
-                      <div key={expense.id} className={`p-6 border-b border-gray-100 hover:bg-gray-50 transition ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
-                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                          <div className="flex-1 space-y-3">
-                            <div className="flex items-start gap-3">
-                              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                                <span className="text-xl">{getCategoryIcon(expense.category)}</span>
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h3 className="text-lg font-bold text-gray-800 truncate">{expense.title}</h3>
-                                <p className="text-sm text-gray-600 mt-1">{expense.description || 'No description'}</p>
-                                <div className="flex flex-wrap items-center gap-3 mt-2">
-                                  <span className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">
-                                    👤 {expense.submitter_name}
-                                  </span>
-                                  <span className="inline-flex items-center px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-bold">
-                                    {getCategoryIcon(expense.category)} {expense.category}
-                                  </span>
-                                  <span className="text-xs text-gray-500 font-medium">
-                                    📅 {new Date(expense.submitted_at).toLocaleDateString()}
-                                  </span>
+                <div className="space-y-4">
+                    {employeeHistory.map(expense => (
+                        <div key={expense.id} className={`p-5 rounded-xl bg-white shadow-lg transition duration-200 hover:shadow-xl border ${expense.status === 'Approved' ? 'border-green-300' : expense.status === 'Rejected' ? 'border-red-300' : 'border-yellow-300'}`}>
+                            <div className="flex justify-between items-start">
+                                <div className='flex-1'>
+                                    <p className="text-lg font-bold text-gray-800">{getCategoryIcon(expense.category)} {expense.title}</p>
+                                    <p className="text-xl font-extrabold text-sky-700 mt-1">{expense.amount.toFixed(2)} {expense.currency}</p>
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        Date Incurred: {new Date(expense.date).toLocaleDateString()}
+                                    </p>
                                 </div>
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-4 pl-13">
-                              <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-4 py-2 rounded-lg border border-green-200">
-                                <p className="text-xs text-green-700 font-medium">Original Amount</p>
-                                <p className="text-xl font-bold text-green-800">{expense.amount.toFixed(2)} {expense.currency}</p>
-                              </div>
-                              {expense.currency !== 'USD' && (
-                                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-2 rounded-lg border border-blue-200">
-                                  <p className="text-xs text-blue-700 font-medium">USD Equivalent</p>
-                                  <p className="text-xl font-bold text-blue-800">
-                                    {convertedAmounts[expense.id] ? `$${convertedAmounts[expense.id].toFixed(2)}` : '⏳ Converting...'}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex gap-3 lg:flex-col">
-                            <button
-                              onClick={() => handleApproval(expense.approval_step_id, 'approved')}
-                              className="flex-1 lg:flex-none px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
-                            >
-                              ✓ Approve
-                            </button>
-                            <button
-                              onClick={() => handleApproval(expense.approval_step_id, 'rejected')}
-                              className="flex-1 lg:flex-none px-6 py-3 bg-gradient-to-r from-red-500 to-pink-600 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
-                            >
-                              ✗ Reject
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Admin View */}
-        {currentUser.role === 'Admin' && (
-          <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
-            <div className="bg-gradient-to-r from-red-500 to-pink-600 px-6 py-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center">
-                  <span className="text-2xl">📊</span>
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-white">All Expenses</h2>
-                  <p className="text-red-100 text-sm">{allExpenses.length} total expenses</p>
-                </div>
-              </div>
-              <button
-                onClick={fetchAllExpenses}
-                className="px-6 py-2.5 bg-white/20 backdrop-blur-sm text-white rounded-xl hover:bg-white/30 transition font-bold border border-white/30"
-              >
-                🔄 Refresh
-              </button>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex border-b border-gray-200 px-6 bg-gray-50">
-              {['all', 'pending', 'approved', 'rejected'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-6 py-4 font-bold text-sm uppercase tracking-wide transition-all relative ${
-                    activeTab === tab
-                      ? 'text-red-600 border-b-2 border-red-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {tab === 'all' && '📋 All'}
-                  {tab === 'pending' && '⏳ Pending'}
-                  {tab === 'approved' && '✅ Approved'}
-                  {tab === 'rejected' && '❌ Rejected'}
-                </button>
-              ))}
-            </div>
-
-            {allExpenses.length === 0 ? (
-              <div className="p-12 text-center">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-4xl">📭</span>
-                </div>
-                <p className="text-gray-600 font-medium text-lg">No expenses found</p>
-                <p className="text-gray-500 text-sm mt-2">Expenses will appear here once submitted</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <div className="inline-block min-w-full align-middle">
-                  <div className="overflow-hidden">
-                    {allExpenses
-                      .filter(exp => activeTab === 'all' || exp.status.toLowerCase() === activeTab)
-                      .map((expense, index) => (
-                        <div key={expense.id} className={`p-6 border-b border-gray-100 hover:bg-gray-50 transition ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
-                          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                            <div className="flex-1 space-y-3">
-                              <div className="flex items-start gap-3">
-                                <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-pink-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                                  <span className="text-xl">{getCategoryIcon(expense.category)}</span>
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-mono">
-                                      #{expense.id}
-                                    </span>
-                                    <h3 className="text-lg font-bold text-gray-800 truncate">{expense.title}</h3>
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-3 mt-2">
-                                    <span className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">
-                                      👤 {expense.submitter_name}
-                                    </span>
-                                    <span className="inline-flex items-center px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-bold">
-                                      {getCategoryIcon(expense.category)} {expense.category}
-                                    </span>
-                                    <span className="text-xs text-gray-500 font-medium">
-                                      📅 {new Date(expense.submitted_at).toLocaleDateString()}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-4 py-2 rounded-lg border border-green-200">
-                                <p className="text-xs text-green-700 font-medium">Amount</p>
-                                <p className="text-xl font-bold text-green-800">{expense.amount.toFixed(2)} {expense.currency}</p>
-                              </div>
-                              <div>
-                                <span className={`px-4 py-2 inline-flex items-center text-sm font-bold rounded-xl shadow-md ${
-                                  expense.status === 'Approved' 
-                                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white'
-                                    : expense.status === 'Rejected'
-                                    ? 'bg-gradient-to-r from-red-500 to-pink-600 text-white'
-                                    : 'bg-gradient-to-r from-yellow-400 to-orange-500 text-white'
-                                }`}>
-                                  {expense.status === 'Approved' && '✅'}
-                                  {expense.status === 'Rejected' && '❌'}
-                                  {expense.status === 'Pending' && '⏳'}
-                                  {' '}{expense.status}
+                                <span className={`px-3 py-1 inline-flex items-center text-sm font-bold rounded-full ${getStatusStyle(expense.status)} text-white shadow-sm`}>
+                                    {expense.status}
                                 </span>
-                              </div>
                             </div>
-                          </div>
+                            
+                            <div className="mt-4 pt-3 border-t border-gray-100">
+                                <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">Approval Flow</h4>
+                                <ol className="relative border-l border-gray-300 ml-4">
+                                    {/* FIX: Use default empty array to prevent .map() on undefined */}
+                                    {(expense.approval_steps || []).map(step => (
+                                        <li key={step.id} className="ml-6 flex items-start space-x-2 mb-3">
+                                            <span className={`absolute flex items-center justify-center w-5 h-5 rounded-full -left-2.5 ring-4 ring-white ${getStatusStyle(step.status)}`}>
+                                                {step.status === 'Approved' ? '✓' : step.status === 'Rejected' ? '✗' : '...'}
+                                            </span>
+                                            <div className='flex flex-col text-gray-800'>
+                                                <p className="text-sm font-semibold">{step.approver_name} (Step {step.sequence})</p>
+                                                <p className="text-xs text-gray-500">{step.comments || (step.status === 'Waiting' ? 'Awaiting Review' : 'No comments')}</p>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ol>
+                            </div>
                         </div>
-                      ))}
-                    {allExpenses.filter(exp => activeTab === 'all' || exp.status.toLowerCase() === activeTab).length === 0 && (
-                      <div className="p-12 text-center">
-                        <p className="text-gray-500 font-medium">No {activeTab} expenses found</p>
-                      </div>
-                    )}
-                  </div>
+                    ))}
                 </div>
-              </div>
             )}
-          </div>
-        )}
-      </main>
+        </div>
+    );
+    
+    // Admin User Management Component
+    const AdminUserManagement = () => (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* User Form (Create/Edit) */}
+            <div className="lg:col-span-1 bg-white rounded-xl shadow-xl p-6 border border-gray-100 h-fit sticky top-20">
+                <h3 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-3">
+                    {userForm.id === null ? '👤 Create New User' : `✏️ Edit User ID: ${userForm.id}`}
+                </h3>
+                
+                <form onSubmit={handleUserSubmit} className="space-y-4">
+                    {/* Name */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Full Name *</label>
+                        <input type="text" value={userForm.name} required
+                            onChange={(e) => setUserForm({...userForm, name: e.target.value})}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="Enter full name"/>
+                    </div>
+                    
+                    {/* Email */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
+                        <input type="email" value={userForm.email} required
+                            onChange={(e) => setUserForm({...userForm, email: e.target.value})}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="user@company.com"/>
+                    </div>
+                    
+                    {/* Password (Required for create, optional for update) */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Password {userForm.id === null ? '*' : '(Leave blank to keep old)'}</label>
+                        <input type="password" value={userForm.password} 
+                            required={userForm.id === null}
+                            onChange={(e) => setUserForm({...userForm, password: e.target.value})}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="Set password"/>
+                    </div>
+                    
+                    {/* Role */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Role *</label>
+                        <select value={userForm.role} required
+                            onChange={(e) => setUserForm({...userForm, role: e.target.value})}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none appearance-none bg-white">
+                            <option value="Employee">Employee</option>
+                            <option value="Manager">Manager</option>
+                            <option value="Admin">Admin</option>
+                        </select>
+                    </div>
+                    
+                    {/* Manager ID (Only for Employee/Manager roles) */}
+                    {(userForm.role === 'Employee' || userForm.role === 'Manager') && (
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">Reports To (Manager/Admin)</label>
+                            <select value={userForm.manager_id || 'null'} 
+                                onChange={(e) => setUserForm({...userForm, manager_id: e.target.value})}
+                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none appearance-none bg-white">
+                                <option value="null">-- None (Top Level) --</option>
+                                {managers.map(manager => (
+                                    <option key={manager.id} value={manager.id}>
+                                        {manager.name} ({manager.role})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
 
-      {/* Footer */}
-      <footer className="max-w-7xl mx-auto px-4 py-8 text-center text-gray-500 text-sm">
-        <p className="font-medium">💰 Expense Manager v1.0 - Built for Hackathon</p>
-        <p className="mt-1">Powered by Flask + React + Tailwind CSS</p>
-      </footer>
-    </div>
-  );
+                    <button type="submit" 
+                        className="w-full bg-indigo-600 text-white py-3.5 rounded-lg font-bold shadow-md shadow-indigo-600/40 hover:bg-indigo-700 transform hover:scale-[1.005] transition-all duration-200 disabled:opacity-50">
+                        {userForm.id === null ? '➕ Create User' : '💾 Save Changes'}
+                    </button>
+                    
+                    {userForm.id !== null && (
+                        <button type="button" onClick={resetUserForm}
+                            className="w-full bg-gray-200 text-gray-700 py-3.5 rounded-lg font-bold hover:bg-gray-300 transition-all duration-200">
+                            Cancel Edit
+                        </button>
+                    )}
+                </form>
+            </div>
+
+            {/* User List */}
+            <div className="lg:col-span-2 space-y-4">
+                <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl shadow-md border border-gray-200">
+                    <h3 className="text-2xl font-bold text-gray-800">All Users ({allUsers.length})</h3>
+                    <button onClick={fetchAllUsers} disabled={isUserManagementLoading}
+                        className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md disabled:opacity-50">
+                        {isUserManagementLoading ? 'Loading...' : '🔄 Refresh List'}
+                    </button>
+                </div>
+                
+                {isUserManagementLoading ? (<div className="p-6 text-center text-gray-500 bg-white rounded-xl shadow-xl">Loading user data...</div>) : (
+                    <div className="bg-white rounded-xl shadow-xl overflow-hidden divide-y divide-gray-100 border border-gray-200">
+                        {allUsers.map(user => (
+                            <div key={user.id} className="p-4 flex flex-col sm:flex-row justify-between items-center transition duration-200 hover:bg-gray-50">
+                                <div className="flex-1 min-w-0 space-y-1 sm:space-y-0 sm:flex sm:items-center sm:gap-4">
+                                    <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-mono">ID: #{user.id}</span>
+                                    <p className="text-lg font-bold text-gray-800 truncate">{user.name}</p>
+                                    <span className={`px-2 py-0.5 ${getRoleColor(user.role)} text-white rounded-full text-xs font-bold shadow-md`}>
+                                        {user.role}
+                                    </span>
+                                </div>
+                                <div className="flex flex-col text-sm text-gray-500 mt-2 sm:mt-0 sm:text-right">
+                                    <p className="font-medium truncate">{user.email}</p>
+                                    <p className="text-xs">Reports to: <span className="font-semibold text-gray-700">{user.manager_name}</span></p>
+                                </div>
+                                <div className="flex gap-2 mt-3 sm:mt-0 sm:ml-4">
+                                    <button onClick={() => setUserForm({ id: user.id, name: user.name, email: user.email, password: '', role: user.role, manager_id: user.manager_id || 'null' })}
+                                        className="px-3 py-1 bg-sky-500 text-white rounded-lg font-semibold hover:bg-sky-600 transition-all text-sm shadow-md">
+                                        Edit
+                                    </button>
+                                    <button onClick={() => handleDeleteUser(user.id)}
+                                        className="px-3 py-1 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-all text-sm shadow-md disabled:opacity-50"
+                                        disabled={user.role === 'Admin' && allUsers.filter(u => u.role === 'Admin').length === 1}>
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+
+    return (
+        <div className="min-h-screen bg-gray-100 text-gray-800 font-sans">
+            {/* Enhanced Header */}
+            <header className="bg-white shadow-lg sticky top-0 z-50 border-b border-gray-200">
+                <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                        <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 bg-sky-500 rounded-full flex items-center justify-center shadow-md">
+                                <span className="text-xl text-white">💰</span>
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-black text-gray-900">EXPENSE MANAGER</h1>
+                                <p className="text-xs text-gray-600 flex items-center gap-2">
+                                    User: <span className="font-bold text-gray-800">{currentUser?.name || 'Guest'}</span>
+                                    <span className={`px-2 py-0.5 ${getRoleColor(currentUser?.role)} text-white rounded-full text-xs font-bold shadow-md`}>
+                                        {currentUser?.role || 'Logging In'}
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+                        {currentUser && (
+                            <button
+                                onClick={handleLogout}
+                                className="px-5 py-2 bg-red-500 text-white rounded-lg font-bold hover:bg-red-600 transition-all shadow-md shadow-red-500/30 text-sm"
+                            >
+                                🚪 Logout
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+                
+                {/* --- Employee View --- */}
+                {currentUser?.role === 'Employee' && (
+                    <div className="space-y-6">
+                        {/* Tabs for Employee */}
+                        <div className="flex border-b border-gray-300 bg-white shadow-xl rounded-xl overflow-hidden p-1">
+                            {['submit', 'history'].map((tab) => (
+                                <button
+                                    key={tab}
+                                    onClick={() => handleEmployeeTabChange(tab)}
+                                    className={`flex-1 px-6 py-3 font-bold text-sm uppercase tracking-wide rounded-lg transition-all ${
+                                        employeeTab === tab
+                                            ? 'bg-sky-500 text-white shadow-md'
+                                            : 'text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                >
+                                    {tab === 'submit' ? '📝 New Expense' : '⏱️ Expense History'}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Submission Form */}
+                        {employeeTab === 'submit' && (
+                            <div className="bg-white rounded-xl shadow-xl p-6 sm:p-8 border border-gray-100">
+                                <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-3">Submit New Expense</h2>
+                                
+                                <form onSubmit={handleExpenseSubmit} className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {/* Input Fields */}
+                                        {['title', 'date', 'category', 'currency', 'amount'].map(field => {
+                                            if (field === 'amount') {
+                                                return (
+                                                    <div key={field}>
+                                                        <label className="block text-sm font-semibold text-gray-700 mb-2 capitalize">{field} *</label>
+                                                        <input type="number" step="0.01" value={expenseForm.amount} onChange={(e) => setExpenseForm({...expenseForm, amount: e.target.value})}
+                                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="0.00" required/>
+                                                    </div>
+                                                );
+                                            } else if (field === 'date') {
+                                                 return (
+                                                    <div key={field}>
+                                                        <label className="block text-sm font-semibold text-gray-700 mb-2 capitalize">Date Incurred *</label>
+                                                        <input type="date" value={expenseForm.date} onChange={(e) => setExpenseForm({...expenseForm, date: e.target.value})}
+                                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" required/>
+                                                    </div>
+                                                );
+                                            } else if (field === 'category' || field === 'currency') {
+                                                return (
+                                                    <div key={field}>
+                                                        <label className="block text-sm font-semibold text-gray-700 mb-2 capitalize">{field}</label>
+                                                        <select value={expenseForm[field]} onChange={(e) => setExpenseForm({...expenseForm, [field]: e.target.value})}
+                                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none appearance-none bg-white">
+                                                            {field === 'category' && (
+                                                                <>
+                                                                    <option value="Meals">🍽️ Meals</option><option value="Travel">✈️ Travel</option>
+                                                                    <option value="Office Supplies">📦 Supplies</option><option value="Software">💻 Software</option><option value="Other">📌 Other</option>
+                                                                </>
+                                                            )}
+                                                            {field === 'currency' && (
+                                                                <>
+                                                                    <option value="USD">💵 USD</option><option value="EUR">💶 EUR</option>
+                                                                    <option value="GBP">💷 GBP</option><option value="INR">💴 INR</option><option value="CAD">🍁 CAD</option>
+                                                                </>
+                                                            )}
+                                                        </select>
+                                                    </div>
+                                                );
+                                            } else {
+                                                return (
+                                                    <div key={field}>
+                                                        <label className="block text-sm font-semibold text-gray-700 mb-2 capitalize">{field} *</label>
+                                                        <input type="text" value={expenseForm[field]} onChange={(e) => setExpenseForm({...expenseForm, [field]: e.target.value})}
+                                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder={`e.g., ${field} here`} required/>
+                                                    </div>
+                                                )
+                                            }
+                                        })}
+                                    </div>
+                                    {/* Description */}
+                                    <div>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
+                                        <textarea value={expenseForm.description} onChange={(e) => setExpenseForm({...expenseForm, description: e.target.value})}
+                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-1 focus:ring-sky-500 transition-all outline-none resize-none" rows="3" placeholder="Provide additional details about this expense..."/>
+                                    </div>
+
+                                    <button type="submit" disabled={isSubmitting}
+                                        className="w-full bg-sky-500 text-white py-3.5 rounded-lg font-bold shadow-xl shadow-sky-500/40 hover:bg-sky-600 transform hover:scale-[1.005] transition-all duration-200 disabled:opacity-50">
+                                        {isSubmitting ? 'Submitting...' : '🚀 Submit Expense'}
+                                    </button>
+                                </form>
+                            </div>
+                        )}
+
+                        {/* Expense History View */}
+                        {employeeTab === 'history' && <EmployeeHistory />}
+                    </div>
+                )}
+
+                {/* --- Manager View --- */}
+                {currentUser?.role === 'Manager' && (
+                    <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-gray-200">
+                        <div className="bg-indigo-600 text-white px-6 py-4 flex justify-between items-center shadow-lg">
+                            <h2 className="text-xl font-bold">Approval Queue</h2>
+                            <button onClick={() => fetchApprovalQueue(currentUser.id)}
+                                className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md">
+                                🔄 Refresh Queue
+                            </button>
+                        </div>
+                        {loadingQueue ? (<div className="p-12 text-center text-gray-700">Loading approvals...</div>)
+                        : approvalQueue.length === 0 ? (<div className="p-12 text-center text-gray-500">No pending approvals.</div>)
+                        : (
+                            <div className="overflow-x-auto divide-y divide-gray-100">
+                                {approvalQueue.map((expense) => (
+                                    <div key={expense.id} className={`p-5 transition duration-200 hover:bg-gray-50`}>
+                                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                            <div className="flex-1 space-y-2">
+                                                {/* Expense Details */}
+                                                <div className="flex items-start gap-3">
+                                                    <div className="flex-1 min-w-0">
+                                                        <h3 className="text-lg font-bold text-gray-800 truncate">{getCategoryIcon(expense.category)} {expense.title}</h3>
+                                                        <div className="flex flex-wrap items-center gap-3 mt-1 text-sm text-gray-500">
+                                                            <span className="font-semibold">👤 {expense.submitter_name}</span>
+                                                            <span>| ID: #{expense.id}</span>
+                                                            <span>| 📅 {new Date(expense.submitted_at).toLocaleDateString()}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {/* Amounts */}
+                                                <div className="flex flex-wrap items-center gap-4 pt-2">
+                                                    <div className="bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 shadow-inner">
+                                                        <p className="text-xs text-gray-500 font-medium">Original Amount</p>
+                                                        <p className="text-xl font-bold text-blue-800">{expense.amount.toFixed(2)} {expense.currency}</p>
+                                                    </div>
+                                                    {expense.currency !== 'USD' && (
+                                                        <div className="bg-sky-50 px-4 py-2 rounded-lg border border-sky-200 shadow-inner">
+                                                            <p className="text-xs text-sky-600 font-medium">USD Value</p>
+                                                            <p className="text-xl font-bold text-sky-700">
+                                                                {convertedAmounts[expense.id] ? `$${convertedAmounts[expense.id].toFixed(2)}` : '...'}
+                                                            </p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {/* Action Buttons */}
+                                            <div className="flex gap-3 mt-4 lg:mt-0 lg:flex-row lg:w-fit w-full">
+                                                <button onClick={() => handleApproval(expense.approval_step_id, 'approved')}
+                                                    className="flex-1 px-5 py-2.5 bg-green-500 text-white rounded-lg font-bold hover:bg-green-600 transition-all shadow-md shadow-green-500/50 transform hover:scale-[1.01]">
+                                                    ✓ Approve
+                                                </button>
+                                                <button onClick={() => handleApproval(expense.approval_step_id, 'rejected')}
+                                                    className="flex-1 px-5 py-2.5 bg-red-500 text-white rounded-lg font-bold hover:bg-red-600 transition-all shadow-md shadow-red-500/50 transform hover:scale-[1.01]">
+                                                    ✗ Reject
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* --- Admin View --- */}
+                {currentUser?.role === 'Admin' && (
+                    <div className="space-y-6">
+                        {/* Tabs for Admin */}
+                        <div className="flex border-b border-gray-300 bg-white shadow-xl rounded-xl overflow-hidden p-1">
+                            {/* Expense Tab */}
+                            <button key="expenses" onClick={() => { setAdminTab('expenses'); fetchAllExpenses(); }}
+                                className={`flex-1 px-6 py-3 font-bold text-sm uppercase tracking-wide rounded-lg transition-all ${
+                                    adminTab === 'expenses' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
+                                }`}
+                            >
+                                📋 All Expenses
+                            </button>
+                            {/* User Management Tab (NEW) */}
+                            <button key="users" onClick={() => { setAdminTab('users'); fetchAllUsers(); }}
+                                className={`flex-1 px-6 py-3 font-bold text-sm uppercase tracking-wide rounded-lg transition-all ${
+                                    adminTab === 'users' ? 'bg-gray-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'
+                                }`}
+                            >
+                                👥 User Management
+                            </button>
+                        </div>
+                        
+                        {/* Admin Expenses View */}
+                        {adminTab === 'expenses' && (
+                            <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-gray-200">
+                                <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center shadow-lg">
+                                    <h2 className="text-xl font-bold">All Expenses Overview</h2>
+                                    <button onClick={fetchAllExpenses}
+                                        className="px-4 py-2 bg-sky-400 text-white rounded-lg hover:bg-sky-500 transition font-semibold shadow-md">
+                                        🔄 Refresh Data
+                                    </button>
+                                </div>
+                                {/* Filter Tabs */}
+                                <div className="flex border-b border-gray-200 px-6 bg-gray-50">
+                                    {['all', 'pending', 'approved', 'rejected'].map((tab) => (
+                                        <button key={tab} onClick={() => setAdminTab(tab)}
+                                            className={`px-4 py-3 font-bold text-sm uppercase tracking-wide transition-all ${
+                                                adminTab === tab ? 'text-sky-600 border-b-2 border-sky-600' : 'text-gray-500 hover:text-gray-700'
+                                            }`}
+                                            style={{ borderBottom: adminTab === tab ? '2px solid #0284C7' : '2px solid transparent' }}
+                                        >
+                                            {tab === 'all' && '📋 All'}
+                                            {tab === 'pending' && '⏳ Pending'}
+                                            {tab === 'approved' && '✅ Approved'}
+                                            {tab === 'rejected' && '❌ Rejected'}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* Expense List */}
+                                {allExpenses.length === 0 ? (<div className="p-12 text-center text-gray-500">No expenses found.</div>) : (
+                                    <div className="overflow-x-auto divide-y divide-gray-100">
+                                        {allExpenses
+                                            .filter(exp => adminTab === 'all' || exp.status.toLowerCase() === adminTab)
+                                            .map((expense) => (
+                                                <div key={expense.id} className={`p-5 transition duration-200 hover:bg-gray-50`}>
+                                                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                                        <div className="flex-1 space-y-2">
+                                                            <div className="flex items-start gap-3">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="flex items-center gap-2 mb-1">
+                                                                        <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-mono">#{expense.id}</span>
+                                                                        <h3 className="text-lg font-bold text-gray-800 truncate">{expense.title}</h3>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500">
+                                                                        <span className="font-semibold">👤 {expense.submitter_name}</span>
+                                                                        <span>| {getCategoryIcon(expense.category)} {expense.category}</span>
+                                                                        <span>| 📅 {new Date(expense.submitted_at).toLocaleDateString()}</span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="bg-gray-50 px-4 py-2 rounded-lg border border-gray-200">
+                                                                <p className="text-xs text-gray-500 font-medium">Amount</p>
+                                                                <p className="text-xl font-bold text-blue-800">{expense.amount.toFixed(2)} {expense.currency}</p>
+                                                            </div>
+                                                            <div>
+                                                                <span className={`px-3 py-1 inline-flex items-center text-sm font-bold rounded-full ${getStatusStyle(expense.status)} text-white shadow-sm`}>
+                                                                    {expense.status}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        {allExpenses.filter(exp => adminTab === 'all' || exp.status.toLowerCase() === adminTab).length === 0 && (
+                                            <div className="p-12 text-center text-gray-500">No {adminTab} expenses found</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* Admin User Management View (NEW) */}
+                        {adminTab === 'users' && <AdminUserManagement />}
+                    </div>
+                )}
+                
+            </main>
+
+            {/* --- Login/Registration Screen (Clean Corporate Style) --- */}
+            {!currentUser && (
+                <div className="fixed inset-0 flex items-center justify-center p-6 bg-gray-900 z-[100]"
+                    style={{
+                        backgroundImage: `linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%)`,
+                    }}>
+                    <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-lg border-t-8 border-sky-500">
+                        
+                        <div className="text-center mb-8">
+                            <div className="inline-flex items-center justify-center w-16 h-16 bg-sky-500 rounded-full mb-4 shadow-lg">
+                                <span className="text-3xl text-white">🏦</span>
+                            </div>
+                            <h1 className="text-3xl font-extrabold text-gray-900 mb-1">
+                                {isRegistering ? 'CREATE EMPLOYEE ACCOUNT' : 'EXPENSE MANAGER LOGIN'}
+                            </h1>
+                            <p className="text-gray-500 font-medium">Access your secure financial tracking portal.</p>
+                        </div>
+
+                        {isRegistering ? (
+                            /* --- Registration Form --- */
+                            <form onSubmit={handleRegistration} className="space-y-4">
+                                {['name', 'email', 'password'].map(field => (
+                                    <div key={field}>
+                                        <label className="block text-sm font-semibold text-gray-700 mb-2 capitalize">{field} *</label>
+                                        <input type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'}
+                                            value={regForm[field]} onChange={(e) => setRegForm({...regForm, [field]: e.target.value})}
+                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg placeholder-gray-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" 
+                                            placeholder={`Enter your ${field}`} required/>
+                                    </div>
+                                ))}
+
+                                {regError && (<div className="bg-red-100 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg"><span className="font-medium">⚠️ {regError}</span></div>)}
+                                
+                                <button type="submit" disabled={isRegLoading}
+                                    className="w-full bg-sky-500 text-white py-3.5 rounded-lg font-bold text-lg shadow-md shadow-sky-500/50 hover:bg-sky-600 transition-all duration-200 disabled:opacity-50 mt-4">
+                                    {isRegLoading ? 'Registering...' : 'Create Account'}
+                                </button>
+                                <p className="text-center text-sm text-gray-600 mt-4">
+                                    Already have an account? <span className="font-bold text-sky-600 cursor-pointer hover:text-sky-500" onClick={() => setIsRegistering(false)}>Log In</span>
+                                </p>
+                            </form>
+                        ) : (
+                            /* --- Login Form --- */
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Email Address *</label>
+                                    <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
+                                        className="w-full px-4 py-3 border border-gray-300 rounded-lg placeholder-gray-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="user@company.com" required/>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Password *</label>
+                                    <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)}
+                                        className="w-full px-4 py-3 border border-gray-300 rounded-lg placeholder-gray-400 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all outline-none" placeholder="Enter your password" required/>
+                                </div>
+
+                                {loginError && (<div className="bg-red-100 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg"><span className="font-medium">⚠️ {loginError}</span></div>)}
+
+                                <button type="submit" disabled={isLoading}
+                                    className="w-full bg-sky-500 text-white py-3.5 rounded-lg font-bold text-lg shadow-md shadow-sky-500/50 hover:bg-sky-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    {isLoading ? (<span className="flex items-center justify-center"><svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Signing in...</span>) : ('Sign In')}
+                                </button>
+                                <p className="text-center text-sm text-gray-600 mt-4">
+                                    Need an account? <span className="font-bold text-sky-600 cursor-pointer hover:text-sky-500" onClick={() => setIsRegistering(true)}>Create Account</span>
+                                </p>
+                            </form>
+                        )}
+                        
+                        <div className="mt-8 pt-6 border-t border-gray-200 text-center">
+                            <p className="text-sm text-gray-500 font-semibold mb-3">Demo Credentials (Password is plaintext)</p>
+                            <div className="grid grid-cols-3 gap-2 text-xs text-gray-600 font-medium">
+                                <span className="font-bold text-center text-indigo-600">Admin: admin123</span>
+                                <span className="font-bold text-center text-indigo-600">Manager: manager123</span>
+                                <span className="font-bold text-center text-indigo-600">Emp 1: emp123</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Footer */}
+            <footer className="max-w-7xl mx-auto px-4 py-8 text-center text-gray-500 text-sm">
+                <p className="font-medium">💼 EXPENSE MANAGER v2.0 - High-Trust Financial Theme</p>
+                <p className="mt-1">Features: Registration, 3-Step Approval, Employee History</p>
+            </footer>
+            
+            <MessageToast message={toastMessage} type={toastType} onClose={() => setToastMessage(null)} />
+        </div>
+    );
 }
 
 export default App;
